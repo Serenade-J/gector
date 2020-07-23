@@ -108,7 +108,7 @@ def main(args):
     dev_data = reader.read(args.dev_set)
 
     default_tokens = [DEFAULT_OOV_TOKEN, DEFAULT_PADDING_TOKEN]
-    namespaces = ['labels', 'd_tags']
+    namespaces = ['labels', 'd_tags', 'reorder']
     tokens_to_add = {x: default_tokens for x in namespaces}
     # build vocab
     if args.vocab_path:
@@ -117,7 +117,8 @@ def main(args):
         vocab = Vocabulary.from_instances(train_data,
                                           max_vocab_size={'tokens': 30000,
                                                           'labels': args.target_vocab_size,
-                                                          'd_tags': 2},
+                                                          'd_tags': 2,
+                                                          'reorder': 2},
                                           tokens_to_add=tokens_to_add)
     vocab.save_to_files(os.path.join(args.model_dir, 'vocabulary'))
 
@@ -138,7 +139,7 @@ def main(args):
         cuda_device = -1
 
     if args.pretrain:
-        model.load_state_dict(torch.load(os.path.join(args.pretrain_folder, args.pretrain + '.th')))
+        model.load_state_dict(torch.load(os.path.join(args.pretrain_folder, args.pretrain + '.th')), strict=False)
 
     model = model.to(device)
 
@@ -199,7 +200,7 @@ if __name__ == '__main__':
     parser.add_argument('--batch_size',
                         type=int,
                         help='The size of the batch.',
-                        default=32)
+                        default=128)
     parser.add_argument('--max_len',
                         type=int,
                         help='The max sentence length'
@@ -208,11 +209,11 @@ if __name__ == '__main__':
     parser.add_argument('--target_vocab_size',
                         type=int,
                         help='The size of target vocabularies.',
-                        default=1000)
+                        default=5000)
     parser.add_argument('--n_epoch',
                         type=int,
                         help='The number of epoch for training model.',
-                        default=20)
+                        default=3)
     parser.add_argument('--patience',
                         type=int,
                         help='The number of epoch with any improvements'
@@ -293,11 +294,11 @@ if __name__ == '__main__':
     parser.add_argument('--transformer_model',
                         choices=['bert', 'distilbert', 'gpt2', 'roberta', 'transformerxl', 'xlnet', 'albert'],
                         help='Name of the transformer model.',
-                        default='roberta')
+                        default='bert')
     parser.add_argument('--special_tokens_fix',
                         type=int,
                         help='Whether to fix problem with [CLS], [SEP] tokens tokenization.',
-                        default=1)
+                        default=0)
 
     args = parser.parse_args()
     main(args)

@@ -346,7 +346,7 @@ class Trainer(TrainerBase):
                     all_words = [len(y['words']) for y in x['metadata']]
                     print(f"Total sents: {len(all_words)}. "
                           f"Min {min(all_words)}. Max {max(all_words)}")
-                    for elem in ['labels', 'd_tags']:
+                    for elem in ['labels', 'd_tags', 'reorder']:
                         tt = x[elem]
                         print(
                             f"{elem} shape {list(tt.shape)} and min {tt.min().item()} and {tt.max().item()}")

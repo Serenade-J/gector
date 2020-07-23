@@ -5,7 +5,7 @@ from difflib import SequenceMatcher
 import Levenshtein
 import numpy as np
 from tqdm import tqdm
-
+from collections import Counter
 from helpers import write_lines, read_parallel_lines, encode_verb_form, \
     apply_reverse_transformation, SEQ_DELIMETERS, START_TOKEN
 
@@ -190,6 +190,13 @@ def align_sequences(source_sent, target_sent):
         return None
     source_tokens = source_sent.split()
     target_tokens = target_sent.split()
+
+    Flag_r = False
+    if len(source_tokens) == len(target_tokens) and source_tokens != target_tokens:
+        src_set = set(source_tokens)
+        tgt_set = set(target_tokens)
+        if src_set == tgt_set and Counter(source_tokens) == Counter(target_tokens):
+            Flag_r = True
     matcher = SequenceMatcher(None, source_tokens, target_tokens)
     diffs = list(matcher.get_opcodes())
     all_edits = []
@@ -230,6 +237,10 @@ def align_sequences(source_sent, target_sent):
     labels = convert_edits_into_labels(source_tokens, all_edits)
     # match tags to source tokens
     sent_with_tags = add_labels_to_the_tokens(source_tokens, labels)
+    if Flag_r:
+        sent_with_tags = '1'+sent_with_tags
+    else:
+        sent_with_tags = '0' + sent_with_tags
     return sent_with_tags
 
 
@@ -328,6 +339,7 @@ def add_labels_to_the_tokens(source_tokens, labels, delimeters=SEQ_DELIMETERS):
 def convert_data_from_raw_files(source_file, target_file, output_file, chunk_size):
     tagged = []
     source_data, target_data = read_parallel_lines(source_file, target_file)
+
     print(f"The size of raw dataset is {len(source_data)}")
     cnt_total, cnt_all, cnt_tp = 0, 0, 0
     for source_sent, target_sent in tqdm(zip(source_data, target_data)):

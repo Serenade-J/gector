@@ -7,20 +7,27 @@ from gector.gec_model import GecBERTModel
 def predict_for_file(input_file, output_file, model, batch_size=32):
     test_data = read_lines(input_file)
     predictions = []
+    reos = []
     cnt_corrections = 0
     batch = []
+    sugs = []
     for sent in test_data:
         batch.append(sent.split())
         if len(batch) == batch_size:
-            preds, cnt = model.handle_batch(batch)
+            preds, cnt, reo, sug = model.handle_batch(batch)
             predictions.extend(preds)
+            reos.extend(reo)
+            sugs.extend(sug)
             cnt_corrections += cnt
             batch = []
     if batch:
-        preds, cnt = model.handle_batch(batch)
+        preds, cnt, reo, sug = model.handle_batch(batch)
         predictions.extend(preds)
+        reos.extend(reo)
+        sugs.extend(sug)
         cnt_corrections += cnt
-
+    print(len(predictions))
+    print(len(reos))
     with open(output_file, 'w') as f:
         f.write("\n".join([" ".join(x) for x in predictions]) + '\n')
     return cnt_corrections
@@ -73,7 +80,7 @@ if __name__ == '__main__':
                         type=int,
                         help='The minimum sentence length'
                              '(all longer will be returned w/o changes)',
-                        default=3)
+                        default=0)
     parser.add_argument('--batch_size',
                         type=int,
                         help='The size of hidden unit cell.',
@@ -85,11 +92,11 @@ if __name__ == '__main__':
     parser.add_argument('--transformer_model',
                         choices=['bert', 'gpt2', 'transformerxl', 'xlnet', 'distilbert', 'roberta', 'albert'],
                         help='Name of the transformer model.',
-                        default='roberta')
+                        default='bert')
     parser.add_argument('--iteration_count',
                         type=int,
                         help='The number of iterations of the model.',
-                        default=5)
+                        default=1)
     parser.add_argument('--additional_confidence',
                         type=float,
                         help='How many probability to add to $KEEP token.',
@@ -104,7 +111,7 @@ if __name__ == '__main__':
                         type=int,
                         help='Whether to fix problem with [CLS], [SEP] tokens tokenization. '
                              'For reproducing reported results it should be 0 for BERT/XLNet and 1 for RoBERTa.',
-                        default=1)
+                        default=0)
     parser.add_argument('--is_ensemble',
                         type=int,
                         help='Whether to do ensembling.',

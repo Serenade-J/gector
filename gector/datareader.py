@@ -6,7 +6,7 @@ from typing import Dict, List
 
 from allennlp.common.file_utils import cached_path
 from allennlp.data.dataset_readers.dataset_reader import DatasetReader
-from allennlp.data.fields import TextField, SequenceLabelField, MetadataField, Field
+from allennlp.data.fields import TextField, SequenceLabelField, MetadataField, Field, LabelField
 from allennlp.data.instance import Instance
 from allennlp.data.token_indexers import TokenIndexer, SingleIdTokenIndexer
 from allennlp.data.tokenizers import Token
@@ -71,6 +71,10 @@ class Seq2LabelsDatasetReader(DatasetReader):
         with open(file_path, "r") as data_file:
             logger.info("Reading instances from lines in file at: %s", file_path)
             for line in data_file:
+                reorder = '0'
+                if line[0] != '$':
+                    reorder = line[0]
+                    line = line[1:]
                 line = line.strip("\n")
                 # skip blank and broken lines
                 if not line or (not self._test_mode and self._broken_dot_strategy == 'skip'
@@ -93,7 +97,7 @@ class Seq2LabelsDatasetReader(DatasetReader):
                 if self._max_len is not None:
                     tokens = tokens[:self._max_len]
                     tags = None if tags is None else tags[:self._max_len]
-                instance = self.text_to_instance(tokens, tags, words)
+                instance = self.text_to_instance(tokens, tags, words, reorder)
                 if instance:
                     yield instance
 
@@ -121,7 +125,7 @@ class Seq2LabelsDatasetReader(DatasetReader):
         return labels, detect_tags, comlex_flag_dict
 
     def text_to_instance(self, tokens: List[Token], tags: List[str] = None,
-                         words: List[str] = None) -> Instance:  # type: ignore
+                         words: List[str] = None, reorder: str = '0') -> Instance:  # type: ignore
         """
         We take `pre-tokenized` input here, because we don't have a tokenizer in this class.
         """
@@ -148,4 +152,5 @@ class Seq2LabelsDatasetReader(DatasetReader):
                                                   label_namespace="labels")
             fields["d_tags"] = SequenceLabelField(detect_tags, sequence,
                                                   label_namespace="d_tags")
+            fields["reorder"] = LabelField(reorder, label_namespace="reorder")
         return Instance(fields)

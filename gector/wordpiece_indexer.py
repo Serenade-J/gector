@@ -254,7 +254,7 @@ class WordpieceIndexer(TokenIndexer[int]):
 
         # offsets[i] will give us the index into wordpiece_ids
         # for the wordpiece "corresponding to" the i-th input token.
-        offsets = []
+        offsets = [0]
 
         # If we're using initial offsets, we want to start at offset = len(text_tokens)
         # so that the first offset is the index of the first wordpiece of tokens[0].

@@ -51,7 +51,7 @@ class GecBERTModel(object):
     def __init__(self, vocab_path=None, model_paths=None,
                  weigths=None,
                  max_len=50,
-                 min_len=3,
+                 min_len=0,
                  lowercase_tokens=False,
                  log=False,
                  iterations=3,
@@ -89,7 +89,7 @@ class GecBERTModel(object):
                                confidence=self.confidence
                                ).to(self.device)
             if torch.cuda.is_available():
-                model.load_state_dict(torch.load(model_path))
+                model.load_state_dict(torch.load(model_path), strict=False)
             else:
                 model.load_state_dict(torch.load(model_path,
                                                  map_location=torch.device('cpu')))
@@ -140,11 +140,11 @@ class GecBERTModel(object):
                 prediction = model.forward(**batch)
             predictions.append(prediction)
 
-        preds, idx, error_probs = self._convert(predictions)
+        preds, idx, error_probs, reorder_flags = self._convert(predictions)
         t55 = time()
         if self.log:
             print(f"Inference time {t55 - t11}")
-        return preds, idx, error_probs
+        return preds, idx, error_probs, reorder_flags
 
     def get_token_action(self, token, index, prob, sugg_token):
         """Get lost of suggested actions for token."""
@@ -214,14 +214,15 @@ class GecBERTModel(object):
     def _convert(self, data):
         all_class_probs = torch.zeros_like(data[0]['class_probabilities_labels'])
         error_probs = torch.zeros_like(data[0]['max_error_probability'])
+        reorder_flags = torch.zeros_like(data[0]['reorder_res'])
         for output, weight in zip(data, self.model_weights):
             all_class_probs += weight * output['class_probabilities_labels'] / sum(self.model_weights)
             error_probs += weight * output['max_error_probability'] / sum(self.model_weights)
-
+            reorder_flags += weight * output['reorder_res'] / sum(self.model_weights)
         max_vals = torch.max(all_class_probs, dim=-1)
         probs = max_vals[0].tolist()
         idx = max_vals[1].tolist()
-        return probs, idx, error_probs.tolist()
+        return probs, idx, error_probs.tolist(), reorder_flags.tolist()
 
     def update_final_batch(self, final_batch, pred_ids, pred_batch,
                            prev_preds_dict):
@@ -248,6 +249,7 @@ class GecBERTModel(object):
                           error_probs,
                           max_len=50):
         all_results = []
+        sug_res = []
         noop_index = self.vocab.get_token_index("$KEEP", "labels")
         for tokens, probabilities, idxs, error_prob in zip(batch,
                                                            all_probabilities,
@@ -266,6 +268,8 @@ class GecBERTModel(object):
                 all_results.append(tokens)
                 continue
 
+            ins_flag = False
+            del_flag = False
             for i in range(length):
                 token = tokens[i - 1]  # because of START token
                 # skip if there is no error
@@ -274,14 +278,23 @@ class GecBERTModel(object):
 
                 sugg_token = self.vocab.get_token_from_index(idxs[i],
                                                              namespace='labels')
+                if sugg_token.startswith("$APPEND"):
+                    ins_flag = True
+                if sugg_token.startswith("$DELETE"):
+                    del_flag = True
                 action = self.get_token_action(token, i, probabilities[i],
                                                sugg_token)
                 if not action:
                     continue
 
                 edits.append(action)
+            if ins_flag or del_flag:
+                sug_res.append(1)
+            else:
+                sug_res.append(0)
+
             all_results.append(get_target_sent_by_edits(tokens, edits))
-        return all_results
+        return all_results, sug_res
 
     def handle_batch(self, full_batch):
         """
@@ -294,7 +307,8 @@ class GecBERTModel(object):
                      if len(full_batch[i]) < self.min_len]
         pred_ids = [i for i in range(len(full_batch)) if i not in short_ids]
         total_updates = 0
-
+        reorder_list = []
+        sug = []
         for n_iter in range(self.iterations):
             orig_batch = [final_batch[i] for i in pred_ids]
 
@@ -302,10 +316,15 @@ class GecBERTModel(object):
 
             if not sequences:
                 break
-            probabilities, idxs, error_probs = self.predict(sequences)
+            probabilities, idxs, error_probs, reorder_flags = self.predict(sequences)
 
-            pred_batch = self.postprocess_batch(orig_batch, probabilities,
+            if n_iter == 0:
+                reorder_list = reorder_flags
+
+            pred_batch, sug_res = self.postprocess_batch(orig_batch, probabilities,
                                                 idxs, error_probs)
+            if n_iter == 0:
+                sug = sug_res
             if self.log:
                 print(f"Iteration {n_iter + 1}. Predicted {round(100*len(pred_ids)/batch_size, 1)}% of sentences.")
 
@@ -317,4 +336,4 @@ class GecBERTModel(object):
             if not pred_ids:
                 break
 
-        return final_batch, total_updates
+        return final_batch, total_updates, reorder_list, sug

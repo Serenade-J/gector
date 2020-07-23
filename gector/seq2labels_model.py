@@ -56,6 +56,7 @@ class Seq2Labels(Model):
                  predictor_dropout=0.0,
                  labels_namespace: str = "labels",
                  detect_namespace: str = "d_tags",
+                 reorder_namespace: str = "reorder",
                  verbose_metrics: bool = False,
                  label_smoothing: float = 0.0,
                  confidence: float = 0.0,
@@ -64,10 +65,12 @@ class Seq2Labels(Model):
         super(Seq2Labels, self).__init__(vocab, regularizer)
 
         self.label_namespaces = [labels_namespace,
-                                 detect_namespace]
+                                 detect_namespace,
+                                 reorder_namespace]
         self.text_field_embedder = text_field_embedder
         self.num_labels_classes = self.vocab.get_vocab_size(labels_namespace)
         self.num_detect_classes = self.vocab.get_vocab_size(detect_namespace)
+        self.num_reorder_classes = self.vocab.get_vocab_size(reorder_namespace)
         self.label_smoothing = label_smoothing
         self.confidence = confidence
         self.incorr_index = self.vocab.get_token_index("INCORRECT",
@@ -82,6 +85,9 @@ class Seq2Labels(Model):
         self.tag_detect_projection_layer = TimeDistributed(
             Linear(text_field_embedder._token_embedders['bert'].get_output_dim(), self.num_detect_classes))
 
+        self.tag_reorder_projection_layer = TimeDistributed(
+            Linear(text_field_embedder._token_embedders['bert'].get_output_dim(), self.num_reorder_classes)
+        )
         self.metrics = {"accuracy": CategoricalAccuracy()}
 
         initializer(self)
@@ -91,6 +97,7 @@ class Seq2Labels(Model):
                 tokens: Dict[str, torch.LongTensor],
                 labels: torch.LongTensor = None,
                 d_tags: torch.LongTensor = None,
+                reorder: torch.LongTensor = None,
                 metadata: List[Dict[str, Any]] = None) -> Dict[str, torch.Tensor]:
         # pylint: disable=arguments-differ
         """
@@ -128,17 +135,25 @@ class Seq2Labels(Model):
 
         """
         encoded_text = self.text_field_embedder(tokens)
+        cls_encoded = encoded_text[:, 0:1, :]
+        encoded_text = encoded_text[:, 1:, :]
         batch_size, sequence_length, _ = encoded_text.size()
         mask = get_text_field_mask(tokens)
+        mask_reorder = mask[:, 0:1]
+        mask = mask[:,1:]
         logits_labels = self.tag_labels_projection_layer(self.predictor_dropout(encoded_text))
         logits_d = self.tag_detect_projection_layer(encoded_text)
+        logits_r = self.tag_reorder_projection_layer(cls_encoded)
 
         class_probabilities_labels = F.softmax(logits_labels, dim=-1).view(
             [batch_size, sequence_length, self.num_labels_classes])
         class_probabilities_d = F.softmax(logits_d, dim=-1).view(
             [batch_size, sequence_length, self.num_detect_classes])
+        class_probabilities_r = F.softmax(logits_r, dim=-1).view(
+            [batch_size, 1, self.num_reorder_classes])
         error_probs = class_probabilities_d[:, :, self.incorr_index] * mask
         incorr_prob = torch.max(error_probs, dim=-1)[0]
+        reorder_res = class_probabilities_r.view([batch_size, self.num_reorder_classes])[:,1]
 
         if self.confidence > 0:
             probability_change = [self.confidence] + [0] * (self.num_labels_classes - 1)
@@ -147,17 +162,37 @@ class Seq2Labels(Model):
 
         output_dict = {"logits_labels": logits_labels,
                        "logits_d_tags": logits_d,
+                       "logits_reorder": logits_r,
                        "class_probabilities_labels": class_probabilities_labels,
                        "class_probabilities_d_tags": class_probabilities_d,
-                       "max_error_probability": incorr_prob}
+                       "max_error_probability": incorr_prob,
+                       "reorder_res": reorder_res}
         if labels is not None and d_tags is not None:
             loss_labels = sequence_cross_entropy_with_logits(logits_labels, labels, mask,
                                                              label_smoothing=self.label_smoothing)
             loss_d = sequence_cross_entropy_with_logits(logits_d, d_tags, mask)
+            reorder = reorder.view(batch_size, 1)
+            # shape : (batch * sequence_length, num_classes)
+            logits_flat = logits_r.view(-1, logits_r.size(-1))
+            # shape : (batch * sequence_length, num_classes)
+            log_probs_flat = torch.nn.functional.log_softmax(logits_flat, dim=-1)
+            # shape : (batch * max_len, 1)
+            targets_flat = reorder.view(-1, 1).long()
+
+            negative_log_likelihood_flat = - torch.gather(log_probs_flat, dim=1, index=targets_flat)
+            negative_log_likelihood_flat = negative_log_likelihood_flat.mul(3*targets_flat+1)
+            # shape : (batch, sequence_length)
+            negative_log_likelihood = negative_log_likelihood_flat.view(*reorder.size())
+            # shape : (batch, sequence_length)
+            negative_log_likelihood = negative_log_likelihood * mask_reorder.float()
+            per_batch_loss = negative_log_likelihood.sum(1) / (mask_reorder.sum(1).float() + 1e-13)
+            num_non_empty_sequences = ((mask_reorder.sum(1) > 0).float().sum() + 1e-13)
+            loss_r = per_batch_loss.sum() / num_non_empty_sequences
             for metric in self.metrics.values():
                 metric(logits_labels, labels, mask.float())
                 metric(logits_d, d_tags, mask.float())
-            output_dict["loss"] = loss_labels + loss_d
+                metric(logits_r, reorder, mask_reorder.float())
+            output_dict["loss"] = loss_labels + loss_d + loss_r
 
         if metadata is not None:
             output_dict["words"] = [x["words"] for x in metadata]
